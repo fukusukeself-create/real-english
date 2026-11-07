@@ -49,6 +49,8 @@ p{margin:0}
 .row>.btn{flex:1 1 120px}
 .icon{appearance:none;border:1px solid var(--line);background:var(--surface);border-radius:999px;width:42px;height:42px;display:inline-grid;place-items:center;cursor:pointer;flex:none;font-size:1.05rem}
 .icon.play{background:var(--en-soft);border-color:transparent;color:var(--en)}
+.icon.gen{background:var(--warn-soft);animation:pulse 1s infinite}
+@keyframes pulse{50%{opacity:.5}}
 .icon.playing{background:var(--en);color:#fff}
 .label{font-size:.78rem;color:var(--muted);font-weight:700;letter-spacing:.04em}
 .chips{display:flex;flex-wrap:wrap;gap:6px}
@@ -293,13 +295,17 @@ function initNeural(force){if(NV.w||!neuralOn())return;
     else if(m.type==="ready"){NV.ready=true;NV.loading=false;if(!S.settings.neuralOK){S.settings.neuralOK=true;save();}neuralUI();}
     else if(m.type==="error"){NV.failed=true;NV.loading=false;NV.err=m.message;neuralUI();try{NV.w.terminate();}catch(x){}NV.w=null;}
     else if(m.type==="audio"||m.type==="genError"){const r=NV.q[m.id];delete NV.q[m.id];if(!r)return;clearTimeout(r.t);
-      if(m.type==="audio"){const url=URL.createObjectURL(new Blob([m.buf],{type:"audio/wav"}));NV.cache[r.key]=url;r.res(url);}else{delete NV.pending[r.key];r.res(null);}}};
+      if(m.type==="audio"){if(m.ms)NV.lastMs=m.ms;const url=URL.createObjectURL(new Blob([m.buf],{type:"audio/wav"}));NV.cache[r.key]=url;r.res(url);}
+      else{delete NV.pending[r.key];NV.genErr=m.message||"";r.res(null);if(!genWarned){genWarned=true;toast("AI音声を作れませんでした。端末の声で読みます。（"+String(m.message||"").slice(0,60)+"）",5000);}}}};
   NV.w.onerror=e=>{NV.failed=true;NV.loading=false;NV.err=(e&&e.message)||"worker error";neuralUI();NV.w=null;};
   NV.w.postMessage({type:"load"});neuralUI();}
+function neuralKey(text,voice){return voice+"|"+String(text).replace(/~/g,"something").replace(/\s*\/\s*/g,", ").trim();}
+function neuralWillGen(text,opt){return neuralOn()&&NV.ready&&!audioKey(String(text).trim())&&!NV.cache[neuralKey(text,voiceName(opt))];}
+let genWarned=false;
 function neuralUrl(text,voice){const clean=String(text).replace(/~/g,"something").replace(/\s*\/\s*/g,", ").trim();const key=voice+"|"+clean;
   if(NV.cache[key])return Promise.resolve(NV.cache[key]);if(NV.pending[key])return NV.pending[key];
   if(!NV.ready||!NV.w)return Promise.resolve(null);
-  const id=++NV.id;const p=new Promise(res=>{NV.q[id]={key,res,t:setTimeout(()=>{if(NV.q[id]){delete NV.q[id];delete NV.pending[key];res(null);}},25000)};});
+  const id=++NV.id;const p=new Promise(res=>{NV.q[id]={key,res,t:setTimeout(()=>{if(NV.q[id]){delete NV.q[id];delete NV.pending[key];NV.genErr="時間切れ（60秒）";res(null);}},60000)};});
   NV.pending[key]=p;NV.w.postMessage({type:"gen",id,text:clean,voice});return p;}
 /* 先に作っておく（タップしたらすぐ鳴るように） */
 function prefetch(text,voice){if(neuralOn()&&NV.ready&&text&&!audioKey(String(text).trim()))neuralUrl(text,voice||"af_heart");}
@@ -336,7 +342,7 @@ function speak(text,opt={}){const k=opt.key||audioKey(String(text).trim());
   if(k){const my=opt.keep?TTS.token:++TTS.token;if(!opt.keep){if(AU.cur)try{AU.cur.pause();}catch(e){}if(TTS.ok)try{speechSynthesis.cancel();}catch(e){}}return playAudio(k,opt,my);}
   if(neuralOn()&&NV.ready){const my=opt.keep?TTS.token:++TTS.token;
     if(!opt.keep){if(AU.cur)try{AU.cur.pause();}catch(e){}if(TTS.ok)try{speechSynthesis.cancel();}catch(e){}}
-    return neuralUrl(String(text),voiceName(opt)).then(url=>{if(my!==TTS.token)return false;if(url)return playUrl(url,opt,my);return deviceSpeak(text,Object.assign({},opt,{keep:true}));});}
+    return neuralUrl(String(text),voiceName(opt)).then(url=>{if(opt.onReady)try{opt.onReady();}catch(e){}if(my!==TTS.token)return false;if(url)return playUrl(url,opt,my);return deviceSpeak(text,Object.assign({},opt,{keep:true}));});}
   return deviceSpeak(text,opt);}
 function deviceSpeak(text,opt={}){
   return new Promise(res=>{
@@ -357,10 +363,10 @@ function deviceSpeak(text,opt={}){
     const wd=setTimeout(()=>{if(started||fin)return;if(attempt===0)retry();else{TTS.broken=true;ttsHelp();finish(false);}},2500);
     u.onstart=()=>{started=true;TTS.broken=false;};
     u.onend=()=>finish(my===TTS.token);
-    u.onerror=ev=>{const e=ev&&ev.error;if(!started&&attempt===0&&e!=="interrupted"&&e!=="canceled")retry();else finish(false);};
+    u.onerror=ev=>{const e=ev&&ev.error;TTS.lastErr=e||"error";if(!started&&attempt===0&&e!=="interrupted"&&e!=="canceled")retry();else finish(false);};
     try{speechSynthesis.resume();}catch(e){}try{speechSynthesis.speak(u);}catch(e){finish(false);}};
   setTimeout(()=>go(0),busyNow?200:40);});}
-let ttsHelped=false;
+let ttsHelped=false;TTS.lastErr="";
 function ttsHelp(){if(ttsHelped)return;ttsHelped=true;toast("読み上げが動きません。スマホの設定 → システム → 言語 →「テキスト読み上げ」で、Google の音声エンジンと英語（米国）の音声データを入れてください。",7000);}
 async function playLines(lines,opt={}){stopSpeak();const my=TTS.token;
   for(let i=0;i<lines.length;i++){if(my!==TTS.token)return;const l=lines[i];if(opt.onLine)opt.onLine(i);
@@ -368,8 +374,12 @@ async function playLines(lines,opt={}){stopSpeak();const my=TTS.token;
   if(opt.onLine)opt.onLine(-1);}
 /* 再生ボタン（data-say / data-g / data-slow） */
 document.addEventListener("click",async e=>{const b=e.target.closest("[data-say]");if(!b)return;e.preventDefault();
+  if(b.classList.contains("gen"))return;
   if(b.classList.contains("playing")){stopSpeak();return;}
-  stopSpeak();b.classList.add("playing");await speak(b.dataset.say,{g:b.dataset.g||"f",who:b.dataset.who,slow:b.dataset.slow==="1",keep:true});b.classList.remove("playing");});
+  stopSpeak();const opt={g:b.dataset.g||"f",who:b.dataset.who,slow:b.dataset.slow==="1",keep:true};
+  const orig=b.innerHTML;const willGen=neuralWillGen(b.dataset.say,opt);
+  if(willGen){b.classList.add("gen");b.innerHTML="⏳";opt.onReady=()=>{b.classList.remove("gen");b.innerHTML=orig;b.classList.add("playing");};}else b.classList.add("playing");
+  await speak(b.dataset.say,opt);b.classList.remove("playing","gen");b.innerHTML=orig;});
 const playBtn=(text,g,slow,label,who)=>`<button class="icon play" data-say="${esc(text)}" data-g="${g||"f"}" ${who?`data-who="${esc(who)}"`:""} ${slow?'data-slow="1"':""} aria-label="${esc(label||(slow?"ゆっくり再生":"再生"))}">${slow?"🐢":"▶"}</button>`;
 
 /* ---------- 話す（アプリのマイクで直接） ---------- */
@@ -831,7 +841,11 @@ function renderSettings(){loadVoices();const v=TTS.voices;const opt=(sel)=>`<opt
     <p class="small">状態：<b class="nv-status">${neuralStatus()}</b></p>
     ${neuralOn()&&!NV.ready&&!NV.loading?`<button class="btn sm" id="nvStart">今すぐ準備する</button>`:""}
     ${NV.failed&&NV.err?`<p class="note">理由：${esc(NV.err.slice(0,120))}</p>`:""}
-    ${NV.ready?`<button class="btn sm" id="nvTest">▶ AI音声を試す</button>`:""}</section>
+    ${NV.ready?`<button class="btn sm" id="nvTest">▶ AI音声を試す</button>`:""}
+    <details class="small"><summary>音が出ないときの診断</summary><div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">
+      <div>端末の読み上げ：${TTS.ok?"あり":"なし"}／英語の声：${TTS.voices.length}個${TTS.lastErr?`／最後のエラー：${esc(TTS.lastErr)}`:""}</div>
+      <div>AI音声：${esc(neuralStatus())}${NV.lastMs?`／1文 約${(NV.lastMs/1000).toFixed(1)}秒`:""}${NV.genErr?`／最後のエラー：${esc(NV.genErr.slice(0,80))}`:""}</div>
+      <div class="row"><button class="btn sm" id="dgDev">端末の声で試す</button><button class="btn sm" id="dgAI">AI音声で試す</button></div><div id="dgMsg" class="note"></div></div></details></section>
   <section class="card"><h2>AI（APIキー）</h2>
     <p class="note">Claude Console で作った APIキー（sk-ant-…）を入れてください。キーはこのスマホのこのブラウザの中にだけ保存され、AIに話しかけるときに Anthropic にだけ送られます。</p>
     <input type="password" id="apiKey" placeholder="sk-ant-..." value="${esc(API.key)}" autocomplete="off" style="width:100%;border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:var(--surface);min-height:44px">
@@ -847,6 +861,11 @@ function renderSettings(){loadVoices();const v=TTS.voices;const opt=(sel)=>`<opt
   ch("#npd",t=>S.settings.newPerDay=+t.value);ch("#cap",t=>S.settings.revCap=+t.value);ch("#sja",t=>S.settings.showJa=t.checked);
   const nvc=$("#neural");if(nvc)nvc.onchange=e=>{S.settings.neural=e.target.checked;save();if(e.target.checked)initNeural(true);renderSettings();};
   const nvs=$("#nvStart");if(nvs)nvs.onclick=()=>{NV.w=null;NV.failed=false;initNeural(true);renderSettings();};
+  const dgm=t=>{const m=$("#dgMsg");if(m)m.textContent=t;};
+  $("#dgDev").onclick=async()=>{dgm("端末の声で再生中…");stopSpeak();const ok=await deviceSpeak("This is the phone voice. Can you hear me?",{g:"f"});dgm(ok?"端末の声：再生できました":"端末の声：再生できませんでした"+(TTS.lastErr?"（"+TTS.lastErr+"）":""));};
+  $("#dgAI").onclick=async()=>{if(!NV.ready){dgm("AI音声はまだ準備できていません："+neuralStatus());return;}dgm("AI音声を作っています…");stopSpeak();const t0=Date.now();
+    const url=await neuralUrl("This is the AI voice. Can you hear me? "+Date.now()%1000,"af_heart");if(!url){dgm("AI音声：作れませんでした（"+(NV.genErr||"不明")+"）");return;}
+    dgm("AI音声：作成 "+((Date.now()-t0)/1000).toFixed(1)+"秒。再生中…");const ok=await playUrl(url,{},TTS.token);dgm(ok?"AI音声：再生できました（作成 "+((Date.now()-t0)/1000).toFixed(1)+"秒）":"AI音声：再生できませんでした");};
   const nvt=$("#nvTest");if(nvt)nvt.onclick=()=>speak("Hey! This is a brand new sentence, read by the AI voice. Pretty cool, right?",{voice:"af_heart"});
   $("#model").onchange=e=>{API.model=e.target.value;try{localStorage.setItem(MODEL_LS,API.model);}catch(x){}};
   $("#keySave").onclick=async()=>{const k=$("#apiKey").value.trim();const m=$("#keyMsg");if(!/^sk-/.test(k)){m.innerHTML=`<p class="note">sk-ant- で始まるキーを貼ってください。</p>`;return;}
@@ -883,7 +902,7 @@ function renderAbout(){$("#app").innerHTML=`<header class="top"><h1>学習法・
 render();
 /* 端末内保存のみ（Claude の外で動く版） */
 /* 新しい版が出ていたら自動で入れ替える（ブラウザに残った古い版を使わないように） */
-const APP_VER="20261108011551";
+const APP_VER="20261108012209";
 async function checkUpdate(){try{const r=await fetch("version.json?t="+Date.now(),{cache:"no-store"});if(!r.ok)return;const j=await r.json();
   if(!j||!j.v||j.v===APP_VER)return;let tried="";try{tried=sessionStorage.getItem("re-upd")||"";}catch(e){}if(tried===j.v)return;
   try{sessionStorage.setItem("re-upd",j.v);}catch(e){}

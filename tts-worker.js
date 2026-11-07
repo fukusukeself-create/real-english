@@ -1,6 +1,6 @@
 /* スマホの中でAI音声（Kokoro）を作るワーカー。モデルは初回だけ Hugging Face から読み込み、ブラウザに保存される */
 import { KokoroTTS } from "./kokoro.web.js";
-let tts = null, loading = null;
+let tts = null, loading = null, chain = Promise.resolve();
 function load(){
   if (tts) return Promise.resolve(tts);
   if (!loading) loading = (async () => {
@@ -20,17 +20,20 @@ function load(){
   })().catch(e => { loading = null; postMessage({ type: "error", message: String((e && e.message) || e) }); throw e; });
   return loading;
 }
-self.onmessage = async e => {
-  const m = e.data || {};
-  if (m.type === "load") { try { await load(); } catch (_) {} return; }
-  if (m.type === "gen") {
-    try {
-      const t = await load();
-      const audio = await t.generate(m.text, { voice: m.voice || "af_heart", speed: m.speed || 1 });
-      const buf = await audio.toBlob().arrayBuffer();
-      postMessage({ type: "audio", id: m.id, buf }, [buf]);
-    } catch (err) {
-      postMessage({ type: "genError", id: m.id, message: String((err && err.message) || err) });
-    }
+async function gen(m){
+  const t0 = Date.now();
+  try {
+    const t = await load();
+    const audio = await t.generate(m.text, { voice: m.voice || "af_heart", speed: m.speed || 1 });
+    const buf = await audio.toBlob().arrayBuffer();
+    postMessage({ type: "audio", id: m.id, buf, ms: Date.now() - t0 }, [buf]);
+  } catch (err) {
+    postMessage({ type: "genError", id: m.id, message: String((err && err.message) || err) });
   }
+}
+self.onmessage = e => {
+  const m = e.data || {};
+  if (m.type === "load") { load().catch(() => {}); return; }
+  /* 1文ずつ順番に作る（同時に作ると失敗することがあるため） */
+  if (m.type === "gen") { chain = chain.then(() => gen(m)); }
 };
