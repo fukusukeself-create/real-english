@@ -304,18 +304,27 @@ function speak(text,opt={}){const k=opt.key||audioKey(String(text).trim());
   if(k){const my=opt.keep?TTS.token:++TTS.token;if(!opt.keep){if(AU.cur)try{AU.cur.pause();}catch(e){}if(TTS.ok)try{speechSynthesis.cancel();}catch(e){}}return playAudio(k,opt,my);}
   return new Promise(res=>{
   if(!TTS.ok){ttsHelp();return res(false);}
-  const my=opt.keep?TTS.token:++TTS.token;if(!opt.keep)try{speechSynthesis.cancel();}catch(e){}
-  const u=new SpeechSynthesisUtterance(text.replace(/~/g,"something").replace(/\s*\/\s*/g,", "));
-  const g=opt.g||"f";const v=voiceFor(g);if(v){u.voice=v;u.lang=v.lang;}else u.lang="en-US";
-  u.rate=(opt.rate||S.settings.rate)*(opt.slow?0.75:1);
-  const sameVoice=v&&voiceFor(g==="m"?"f":"m")===v;u.pitch=sameVoice?(g==="m"?0.8:1.15):1;
-  let started=false;const wd=setTimeout(()=>{if(!started&&my===TTS.token){TTS.broken=true;ttsHelp();res(false);}},3500);
-  u.onstart=()=>{started=true;TTS.broken=false;};
-  u.onend=()=>{clearTimeout(wd);res(my===TTS.token);};
-  u.onerror=()=>{clearTimeout(wd);res(false);};
-  try{speechSynthesis.speak(u);}catch(e){clearTimeout(wd);res(false);}});}
+  const my=opt.keep?TTS.token:++TTS.token;
+  const clean=String(text).replace(/~/g,"something").replace(/\s*\/\s*/g,", ").replace(/["“”]/g,"");
+  let busyNow=false;try{busyNow=speechSynthesis.speaking||speechSynthesis.pending;speechSynthesis.cancel();}catch(e){}
+  if(!TTS.voices.length)loadVoices();
+  /* Chrome の不具合対策：止めた直後は少し待つ／発話を変数に持っておく／声の指定で失敗したら既定の声でやり直す */
+  const go=attempt=>{if(my!==TTS.token)return res(false);
+    const u=new SpeechSynthesisUtterance(clean);TTS.u=u;
+    const g=opt.g||"f";const v=attempt===0?voiceFor(g):null;if(v){u.voice=v;u.lang=v.lang;}else u.lang="en-US";
+    u.rate=(opt.rate||S.settings.rate)*(opt.slow?0.75:1);
+    const sameVoice=v&&voiceFor(g==="m"?"f":"m")===v;u.pitch=sameVoice?(g==="m"?0.8:1.15):1;
+    let started=false,fin=false;
+    const finish=ok=>{if(fin)return;fin=true;clearTimeout(wd);res(ok);};
+    const retry=()=>{if(fin)return;fin=true;clearTimeout(wd);try{speechSynthesis.cancel();}catch(e){}setTimeout(()=>go(1),200);};
+    const wd=setTimeout(()=>{if(started||fin)return;if(attempt===0)retry();else{TTS.broken=true;ttsHelp();finish(false);}},2500);
+    u.onstart=()=>{started=true;TTS.broken=false;};
+    u.onend=()=>finish(my===TTS.token);
+    u.onerror=ev=>{const e=ev&&ev.error;if(!started&&attempt===0&&e!=="interrupted"&&e!=="canceled")retry();else finish(false);};
+    try{speechSynthesis.resume();}catch(e){}try{speechSynthesis.speak(u);}catch(e){finish(false);}};
+  setTimeout(()=>go(0),busyNow?200:40);});}
 let ttsHelped=false;
-function ttsHelp(){if(ttsHelped)return;ttsHelped=true;toast("音声が出ません。このページをスマホの Chrome で開くと読み上げが使えます（「使い方」に手順があります）。",6000);}
+function ttsHelp(){if(ttsHelped)return;ttsHelped=true;toast("読み上げが動きません。スマホの設定 → システム → 言語 →「テキスト読み上げ」で、Google の音声エンジンと英語（米国）の音声データを入れてください。",7000);}
 async function playLines(lines,opt={}){stopSpeak();const my=TTS.token;
   for(let i=0;i<lines.length;i++){if(my!==TTS.token)return;const l=lines[i];if(opt.onLine)opt.onLine(i);
     const ok=await speak(l.en,{g:(CAST[l.s]||{}).g||"f",keep:true,slow:opt.slow});if(!ok||my!==TTS.token)return;await new Promise(r=>setTimeout(r,320));}
