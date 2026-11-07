@@ -882,6 +882,13 @@ function renderAbout(){$("#app").innerHTML=`<header class="top"><h1>学習法・
 /* ---------- 起動 ---------- */
 render();
 /* 端末内保存のみ（Claude の外で動く版） */
+/* 新しい版が出ていたら自動で入れ替える（ブラウザに残った古い版を使わないように） */
+const APP_VER="20261108011551";
+async function checkUpdate(){try{const r=await fetch("version.json?t="+Date.now(),{cache:"no-store"});if(!r.ok)return;const j=await r.json();
+  if(!j||!j.v||j.v===APP_VER)return;let tried="";try{tried=sessionStorage.getItem("re-upd")||"";}catch(e){}if(tried===j.v)return;
+  try{sessionStorage.setItem("re-upd",j.v);}catch(e){}
+  if(busy())return;await Promise.all(["./","index.html"].map(u=>fetch(u,{cache:"reload"}).catch(()=>{})));save();location.reload();}catch(e){}}
+setTimeout(checkUpdate,800);document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")checkUpdate();});
 setTimeout(()=>initNeural(false),1500);
 </script>
 </body>
