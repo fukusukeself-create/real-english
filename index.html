@@ -308,7 +308,7 @@ function initNeural(force){if(NV.w||!neuralOn())return;
 /* 文ごとに分ける（長い返事でも、最初の文ができしだい話し始めるため） */
 function splitSentences(t){return String(t).trim().split(/(?<=[.!?…])\s+(?=\S)/).map(x=>x.trim()).filter(Boolean);}
 function neuralKey(text,voice){return voice+"|"+String(text).replace(/~/g,"something").replace(/\s*\/\s*/g,", ").trim();}
-function neuralWillGen(text,opt){if(!(neuralOn()&&NV.ready)||audioKey(String(text).trim()))return false;const v=voiceName(opt);const p=splitSentences(text);return !!p.length&&!NV.cache[neuralKey(p[0],v)];}
+function neuralWillGen(text,opt){if(opt.fast&&deviceOK())return false;if(!(neuralOn()&&NV.ready)||audioKey(String(text).trim()))return false;const v=voiceName(opt);const p=splitSentences(text);return !!p.length&&!NV.cache[neuralKey(p[0],v)];}
 let genWarned=false;
 function neuralUrl(text,voice){const clean=String(text).replace(/~/g,"something").replace(/\s*\/\s*/g,", ").trim();const key=voice+"|"+clean;
   if(NV.cache[key])return Promise.resolve(NV.cache[key]);if(NV.pending[key])return NV.pending[key];
@@ -346,7 +346,9 @@ function voiceFor(g){const v=TTS.voices;if(!v.length)return null;
   const m=v.filter(x=>MALE.test(x.name)),f=v.filter(x=>!MALE.test(x.name));
   return g==="m"?(m[0]||v[0]):(f[0]||v[0]);}
 function stopSpeak(){TTS.token++;if(AU.cur)try{AU.cur.pause();}catch(e){}AU.cur=null;if(TTS.ok)try{speechSynthesis.cancel();}catch(e){}$$(".icon.playing").forEach(b=>b.classList.remove("playing"));$$(".line.now").forEach(b=>b.classList.remove("now"));}
+const deviceOK=()=>TTS.ok&&TTS.voices.length>0&&!TTS.broken;
 function speak(text,opt={}){const k=opt.key||audioKey(String(text).trim());
+  if(!k&&opt.fast&&deviceOK()){return deviceSpeak(text,opt).then(ok=>{if(ok||!(neuralOn()&&NV.ready))return ok;return speak(text,Object.assign({},opt,{fast:false,keep:true}));});}
   if(k){const my=opt.keep?TTS.token:++TTS.token;if(!opt.keep){if(AU.cur)try{AU.cur.pause();}catch(e){}if(TTS.ok)try{speechSynthesis.cancel();}catch(e){}}return playAudio(k,opt,my);}
   if(neuralOn()&&NV.ready){const my=opt.keep?TTS.token:++TTS.token;
     if(!opt.keep){if(AU.cur)try{AU.cur.pause();}catch(e){}if(TTS.ok)try{speechSynthesis.cancel();}catch(e){}}
@@ -390,11 +392,11 @@ async function playLines(lines,opt={}){stopSpeak();const my=TTS.token;
 document.addEventListener("click",async e=>{const b=e.target.closest("[data-say]");if(!b)return;e.preventDefault();
   if(b.classList.contains("gen"))return;
   if(b.classList.contains("playing")){stopSpeak();return;}
-  stopSpeak();const opt={g:b.dataset.g||"f",who:b.dataset.who,slow:b.dataset.slow==="1",keep:true};
+  stopSpeak();const opt={g:b.dataset.g||"f",who:b.dataset.who,slow:b.dataset.slow==="1",fast:b.dataset.fast==="1",keep:true};
   const orig=b.innerHTML;const willGen=neuralWillGen(b.dataset.say,opt);
   if(willGen){b.classList.add("gen");b.innerHTML="⏳";opt.onReady=()=>{b.classList.remove("gen");b.innerHTML=orig;b.classList.add("playing");};}else b.classList.add("playing");
   await speak(b.dataset.say,opt);b.classList.remove("playing","gen");b.innerHTML=orig;});
-const playBtn=(text,g,slow,label,who)=>`<button class="icon play" data-say="${esc(text)}" data-g="${g||"f"}" ${who?`data-who="${esc(who)}"`:""} ${slow?'data-slow="1"':""} aria-label="${esc(label||(slow?"ゆっくり再生":"再生"))}">${slow?"🐢":"▶"}</button>`;
+const playBtn=(text,g,slow,label,who,fast)=>`<button class="icon play" data-say="${esc(text)}" data-g="${g||"f"}" ${who?`data-who="${esc(who)}"`:""} ${fast?'data-fast="1"':""} ${slow?'data-slow="1"':""} aria-label="${esc(label||(slow?"ゆっくり再生":"再生"))}">${slow?"🐢":"▶"}</button>`;
 
 /* ---------- 話す（アプリのマイクで直接） ---------- */
 let micBlocked=false,REC=null;
@@ -465,6 +467,7 @@ function compare(target,heard){const tw=target.replace(/~/g," ").split(/\s+/).fi
 const KEY_LS="re-api-key",MODEL_LS="re-model";
 const MODELS={"claude-sonnet-5-5":{n:"Sonnet 5.5（おすすめ）",in:2,out:10},"claude-haiku-5-5":{n:"Haiku 5.5（安い・速い）",in:0.1,out:0.5},"claude-opus-5-5":{n:"Opus 5.5（いちばん賢い）",in:4,out:20}};
 const API={key:"",model:"claude-sonnet-5-5"};
+const fastReply=()=>S.settings.replyVoice!=="ai";
 const chatModel=()=>S.settings.fastChat===false?API.model:"claude-haiku-5-5";
 try{API.key=localStorage.getItem(KEY_LS)||"";const m=localStorage.getItem(MODEL_LS);if(m&&MODELS[m])API.model=m;}catch(e){}
 let aiReady=true;
@@ -757,21 +760,22 @@ async function talkSend(text){if(T.busy)return;if(text){T.msgs.push({who:"me",te
       if(v!==shownEn){shownEn=v;const ty=$("#typing");if(ty){ty.textContent=v;}}
       /* できあがった文から先に声を作る */
       const ps=splitSentences(v);const doneN=m[2]?ps.length:Math.max(0,ps.length-1);
-      for(let i=0;i<doneN;i++){if(!sent.has(ps[i])){sent.add(ps[i]);prefetch(ps[i],voice);}}
+      if(!fastReply())for(let i=0;i<doneN;i++){if(!sent.has(ps[i])){sent.add(ps[i]);prefetch(ps[i],voice);}}
       if(m[2])enDone=true;}});let j;try{j=pickJSON(raw);}catch(e){j=looseJSON(raw);}
     if(text){const me=T.msgs[T.msgs.length-1];if(j.fix&&j.fix.better)me.fix=j.fix;if(j.pron&&j.pron.meant)me.pron=j.pron;}
     T.msgs.push({who:"ai",raw:JSON.stringify({en:j.en,ja:j.ja,fix:j.fix||null,pron:j.pron||null,hint:j.hint||"",hint_ja:j.hint_ja||""}),en:j.en||"",ja:j.ja||"",hint:j.hint||"",hint_ja:j.hint_ja||""});
     if(text){today().talk=(today().talk||0)+1;addXP(3);save();}
-    T.busy=false;renderTalk();const myT=T,myN=T.msgs.length;if(j.fix&&j.fix.better)prefetch(j.fix.better,"af_heart");speak(j.en||"",{g,who}).then(()=>{if(view==="talk"&&T===myT&&T.msgs.length===myN&&!T.busy&&!T.ended&&!REC&&S.settings.handsfree===true&&canMic()){const b=$("[data-mic='tkIn']");if(b)listen($("#tkIn"),b);}});}
+    T.busy=false;renderTalk();const myT=T,myN=T.msgs.length;if(j.fix&&j.fix.better)prefetch(j.fix.better,"af_heart");speak(j.en||"",{g,who,fast:fastReply()}).then(()=>{if(view==="talk"&&T===myT&&T.msgs.length===myN&&!T.busy&&!T.ended&&!REC&&S.settings.handsfree===true&&canMic()){const b=$("[data-mic='tkIn']");if(b)listen($("#tkIn"),b);}});}
   catch(e){T.busy=false;if(text){T.msgs.pop();T.turns--;}renderTalk();toast(aiErr(e),4000);}}
 function renderTalk(){const last=T.msgs.filter(m=>m.who==="ai").slice(-1)[0];const g=T.sc?((CAST[[...new Set(T.sc.lines.map(l=>l.s).filter(s=>s!=="You"))][0]]||{}).g||"f"):"f";
   $("#app").innerHTML=`<header class="top"><div><div class="label">AIと話す</div><h1 style="font-size:1.1rem">${esc(T.sc?T.sc.title:T.free)}</h1></div><button class="btn sm" id="quit">やめる</button></header>
   ${T.sc?`<div class="artbox">${ART(T.sc.art)}</div>`:""}
-  <div class="chat">${T.msgs.map((m,i)=>m.who==="ai"?`<div class="msg them"><div class="row" style="flex-wrap:nowrap;align-items:flex-start">${playBtn(m.en,g,false,"再生",T.sc?[...new Set(T.sc.lines.map(l=>l.s).filter(s=>s!=="You"))][0]:"")}<div><div class="en">${esc(m.en)}</div>${m.ja?`<details class="tiny"><summary class="muted" style="font-weight:400">訳</summary>${esc(m.ja)}</details>`:""}</div></div></div>`:
+  <div class="chat">${T.msgs.map((m,i)=>m.who==="ai"?`<div class="msg them"><div class="row" style="flex-wrap:nowrap;align-items:flex-start">${playBtn(m.en,g,false,"再生",T.sc?[...new Set(T.sc.lines.map(l=>l.s).filter(s=>s!=="You"))][0]:"",fastReply())}<div><div class="en">${esc(m.en)}</div>${m.ja?`<details class="tiny"><summary class="muted" style="font-weight:400">訳</summary>${esc(m.ja)}</details>`:""}</div></div></div>`:
     `<div class="msg me"><div class="en">${esc(m.text)}</div>${m.pron?`<div class="fix">🗣 発音：<span class="en">${esc(m.pron.heard||"")}</span> に聞こえました → <b class="en">${esc(m.pron.meant)}</b> <button class="wchip" data-w="${esc(wkey(m.pron.meant))}" style="min-height:30px;padding:2px 10px">▶ ${esc(m.pron.meant)}</button><br>${esc(m.pron.tip||"")}</div>`:""}${m.fix?`<div class="fix">💡 <span class="en">${esc(m.fix.better||"")}</span> ${m.fix.better?playBtn(m.fix.better,"f"):""}<br>${esc(m.fix.tip||"")}</div>`:""}</div>`).join("")}
   ${T.busy&&!T.ended?`<div class="msg them"><div class="en" id="typing"><span class="muted">…</span></div></div>`:""}</div>
   ${T.summary?`<section class="card">${T.summary}</section>`:""}
   ${!T.ended?`<section class="card">${speakBox("tkIn")}
+    <div class="set small"><span>AIの返事の声</span><div class="chips"><button class="chip" data-rv="fast" aria-pressed="${fastReply()}">⚡ すぐ（スマホの声）</button><button class="chip" data-rv="ai" aria-pressed="${!fastReply()}">🎧 自然（AI音声・少し待つ）</button></div></div>
     <label class="set small"><span>AIが話し終わったら、自動で聞き始める（ハンズフリー）</span><input type="checkbox" id="handsfree" ${S.settings.handsfree===true?"checked":""} style="width:22px;height:22px;accent-color:var(--accent)"></label>
     ${last&&last.hint?`<button class="btn sm ghost" id="hint" style="text-align:left">💬 ヒント：<span class="en">${esc(last.hint)}</span>（${esc(last.hint_ja)}）</button>`:""}</section>`:""}`;
   foot(T.ended?`<button class="btn primary" id="home">ホームへ</button>`:`<button class="btn" id="end" ${T.turns<1||T.busy?"disabled":""}>終わって振り返る</button><button class="btn primary" id="send" ${T.busy?"disabled":""}>送る</button>`);
@@ -779,6 +783,7 @@ function renderTalk(){const last=T.msgs.filter(m=>m.who==="ai").slice(-1)[0];con
   on("#quit",()=>{stopListen();T=null;go("home");});on("#home",()=>{T=null;go("home");});
   on("#send",()=>{const v=$("#tkIn").value.trim();if(!v){toast("🎤を押して話すか、入力してください");return;}talkSend(v);});
   on("#hint",()=>{$("#tkIn").value=last.hint;$("#tkIn").focus();});
+  $$("[data-rv]").forEach(b=>b.onclick=()=>{S.settings.replyVoice=b.dataset.rv;save();renderTalk();});
   const hf=$("#handsfree");if(hf)hf.onchange=e=>{S.settings.handsfree=e.target.checked;save();};
   const ti=$("#tkIn");if(ti)ti.addEventListener("spoken",()=>{const v=ti.value.trim();if(v&&!T.busy)talkSend(v);});
   on("#end",talkEnd);
@@ -933,7 +938,7 @@ function renderAbout(){$("#app").innerHTML=`<header class="top"><h1>学習法・
 render();
 /* 端末内保存のみ（Claude の外で動く版） */
 /* 新しい版が出ていたら自動で入れ替える（ブラウザに残った古い版を使わないように） */
-const APP_VER="20261108161620";
+const APP_VER="20261108161853";
 async function checkUpdate(){try{const r=await fetch("version.json?t="+Date.now(),{cache:"no-store"});if(!r.ok)return;const j=await r.json();
   if(!j||!j.v||j.v===APP_VER)return;let tried="";try{tried=sessionStorage.getItem("re-upd")||"";}catch(e){}if(tried===j.v)return;
   try{sessionStorage.setItem("re-upd",j.v);}catch(e){}
