@@ -4,12 +4,18 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>毎日リアル英語</title>
+<script>
+/* AI音声を速く作るための設定（ページを「分離」して複数スレッドを使えるようにする）。設定の診断から切れる */
+(function(){var off=false;try{off=localStorage.getItem("re-coi-off")==="1";}catch(e){}
+window.coi={coepCredentialless:function(){return true;},quiet:true,shouldRegister:function(){return !off;},shouldDeregister:function(){return off;}};})();
+</script>
+<script src="coi-serviceworker.js"></script>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#ff5a36">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Lexend:wght@400;500;600;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&family=Zen+Maru+Gothic:wght@700&display=swap" rel="stylesheet">
+<link crossorigin="anonymous" href="https://fonts.googleapis.com/css2?family=Lexend:wght@400;500;600;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&family=Zen+Maru+Gothic:wght@700&display=swap" rel="stylesheet">
 <style>
 /* 方向性：深夜の配信ドラマの「字幕」。紺の文字、コーラルの元気なアクセント、英語は読みやすい Lexend。 */
 :root{
@@ -292,15 +298,17 @@ function initNeural(force){if(NV.w||!neuralOn())return;
   NV.loading=true;NV.failed=false;
   NV.w.onmessage=e=>{const m=e.data||{};
     if(m.type==="progress"){NV.loaded=m.loaded;NV.total=m.total;neuralUI();}
-    else if(m.type==="ready"){NV.ready=true;NV.loading=false;if(!S.settings.neuralOK){S.settings.neuralOK=true;save();}neuralUI();}
+    else if(m.type==="ready"){NV.ready=true;NV.isolated=!!m.isolated;NV.cores=m.cores||0;NV.loading=false;if(!S.settings.neuralOK){S.settings.neuralOK=true;save();}neuralUI();}
     else if(m.type==="error"){NV.failed=true;NV.loading=false;NV.err=m.message;neuralUI();try{NV.w.terminate();}catch(x){}NV.w=null;}
     else if(m.type==="audio"||m.type==="genError"){const r=NV.q[m.id];delete NV.q[m.id];if(!r)return;clearTimeout(r.t);
       if(m.type==="audio"){if(m.ms)NV.lastMs=m.ms;const url=URL.createObjectURL(new Blob([m.buf],{type:"audio/wav"}));NV.cache[r.key]=url;r.res(url);}
       else{delete NV.pending[r.key];NV.genErr=m.message||"";r.res(null);if(!genWarned){genWarned=true;toast("AI音声を作れませんでした。端末の声で読みます。（"+String(m.message||"").slice(0,60)+"）",5000);}}}};
   NV.w.onerror=e=>{NV.failed=true;NV.loading=false;NV.err=(e&&e.message)||"worker error";neuralUI();NV.w=null;};
   NV.w.postMessage({type:"load"});neuralUI();}
+/* 文ごとに分ける（長い返事でも、最初の文ができしだい話し始めるため） */
+function splitSentences(t){return String(t).trim().split(/(?<=[.!?…])\s+(?=\S)/).map(x=>x.trim()).filter(Boolean);}
 function neuralKey(text,voice){return voice+"|"+String(text).replace(/~/g,"something").replace(/\s*\/\s*/g,", ").trim();}
-function neuralWillGen(text,opt){return neuralOn()&&NV.ready&&!audioKey(String(text).trim())&&!NV.cache[neuralKey(text,voiceName(opt))];}
+function neuralWillGen(text,opt){if(!(neuralOn()&&NV.ready)||audioKey(String(text).trim()))return false;const v=voiceName(opt);const p=splitSentences(text);return !!p.length&&!NV.cache[neuralKey(p[0],v)];}
 let genWarned=false;
 function neuralUrl(text,voice){const clean=String(text).replace(/~/g,"something").replace(/\s*\/\s*/g,", ").trim();const key=voice+"|"+clean;
   if(NV.cache[key])return Promise.resolve(NV.cache[key]);if(NV.pending[key])return NV.pending[key];
@@ -308,7 +316,7 @@ function neuralUrl(text,voice){const clean=String(text).replace(/~/g,"something"
   const id=++NV.id;const p=new Promise(res=>{NV.q[id]={key,res,t:setTimeout(()=>{if(NV.q[id]){delete NV.q[id];delete NV.pending[key];NV.genErr="時間切れ（60秒）";res(null);}},60000)};});
   NV.pending[key]=p;NV.w.postMessage({type:"gen",id,text:clean,voice});return p;}
 /* 先に作っておく（タップしたらすぐ鳴るように） */
-function prefetch(text,voice){if(neuralOn()&&NV.ready&&text&&!audioKey(String(text).trim()))neuralUrl(text,voice||"af_heart");}
+function prefetch(text,voice){if(neuralOn()&&NV.ready&&text&&!audioKey(String(text).trim()))splitSentences(text).forEach(x=>neuralUrl(x,voice||"af_heart"));}
 
 /* AIのニューラル音声（audio.js に入っている、登場人物ごとの声） */
 const AU={cache:{},cur:null,ready:false};
@@ -342,7 +350,13 @@ function speak(text,opt={}){const k=opt.key||audioKey(String(text).trim());
   if(k){const my=opt.keep?TTS.token:++TTS.token;if(!opt.keep){if(AU.cur)try{AU.cur.pause();}catch(e){}if(TTS.ok)try{speechSynthesis.cancel();}catch(e){}}return playAudio(k,opt,my);}
   if(neuralOn()&&NV.ready){const my=opt.keep?TTS.token:++TTS.token;
     if(!opt.keep){if(AU.cur)try{AU.cur.pause();}catch(e){}if(TTS.ok)try{speechSynthesis.cancel();}catch(e){}}
-    return neuralUrl(String(text),voiceName(opt)).then(url=>{if(opt.onReady)try{opt.onReady();}catch(e){}if(my!==TTS.token)return false;if(url)return playUrl(url,opt,my);return deviceSpeak(text,Object.assign({},opt,{keep:true}));});}
+    const voice=voiceName(opt);const parts=splitSentences(text);const urls=parts.map(x=>neuralUrl(x,voice));
+    return (async()=>{let first=true;
+      for(let i=0;i<parts.length;i++){const url=await urls[i];if(first){first=false;if(opt.onReady)try{opt.onReady();}catch(e){}}
+        if(my!==TTS.token)return false;
+        if(!url){return deviceSpeak(parts.slice(i).join(" "),Object.assign({},opt,{keep:true}));}
+        const ok=await playUrl(url,opt,my);if(!ok)return false;}
+      return true;})();}
   return deviceSpeak(text,opt);}
 function deviceSpeak(text,opt={}){
   return new Promise(res=>{
@@ -481,6 +495,9 @@ async function ask(input,opt={}){if(!API.key)throw {code:"no_key"};
       else if(ev.type==="error")throw {code:"api_error",message:(ev.error&&ev.error.message)||""};}}
   track(usage,opt.model);return text;}
 function pickJSON(t){const s=t.indexOf("{"),e=t.lastIndexOf("}");if(s<0||e<s)throw new Error("no json");return JSON.parse(t.slice(s,e+1));}
+/* 途中で切れたJSONからも、取れる項目だけ取り出す */
+function looseJSON(t){const f=k=>{const m=String(t).match(new RegExp('"'+k+'"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"'));if(!m)return "";try{return JSON.parse('"'+m[1]+'"');}catch(e){return m[1];}};
+  const en=f("en")||String(t).replace(/[{}"]/g,"").trim().slice(0,200);return {en,ja:f("ja"),fix:null,pron:null,hint:f("hint"),hint_ja:f("hint_ja")};}
 const LEARNER="The learner is a Japanese adult who is a true beginner (junior-high-school English or below). Their goal: understand American dramas and news and speak casual English.";
 
 /* ---------- 画面 ---------- */
@@ -734,10 +751,14 @@ function talkHistory(){const m=[{role:"user",content:"(Begin the role-play now w
 async function talkSend(text){if(T.busy)return;if(text){T.msgs.push({who:"me",text});T.turns++;}T.busy=true;renderTalk();
   const who=T.sc?[...new Set(T.sc.lines.map(l=>l.s).filter(s=>s!=="You"))][0]:null;
   const g=T.sc?((CAST[who]||{}).g||"f"):"f";const voice=voiceName({g,who});let shownEn="",enDone=false;
-  try{const raw=await ask(talkHistory(),{model:chatModel(),system:T.sys,maxTokens:400,onText:({text})=>{
+  const sent=new Set();
+  try{const raw=await ask(talkHistory(),{model:chatModel(),system:T.sys,maxTokens:900,onText:({text})=>{
       const m=text.match(/"en"\s*:\s*"((?:[^"\\]|\\.)*)(")?/);if(!m)return;let v;try{v=JSON.parse('"'+m[1].replace(/\\+$/,"")+'"');}catch(e){return;}
       if(v!==shownEn){shownEn=v;const ty=$("#typing");if(ty){ty.textContent=v;}}
-      if(m[2]&&!enDone){enDone=true;prefetch(v,voice);}}});let j;try{j=pickJSON(raw);}catch(e){j={en:raw.trim().slice(0,200),ja:"",fix:null,hint:"",hint_ja:""};}
+      /* できあがった文から先に声を作る */
+      const ps=splitSentences(v);const doneN=m[2]?ps.length:Math.max(0,ps.length-1);
+      for(let i=0;i<doneN;i++){if(!sent.has(ps[i])){sent.add(ps[i]);prefetch(ps[i],voice);}}
+      if(m[2])enDone=true;}});let j;try{j=pickJSON(raw);}catch(e){j=looseJSON(raw);}
     if(text){const me=T.msgs[T.msgs.length-1];if(j.fix&&j.fix.better)me.fix=j.fix;if(j.pron&&j.pron.meant)me.pron=j.pron;}
     T.msgs.push({who:"ai",raw:JSON.stringify({en:j.en,ja:j.ja,fix:j.fix||null,pron:j.pron||null,hint:j.hint||"",hint_ja:j.hint_ja||""}),en:j.en||"",ja:j.ja||"",hint:j.hint||"",hint_ja:j.hint_ja||""});
     if(text){today().talk=(today().talk||0)+1;addXP(3);save();}
@@ -850,6 +871,7 @@ function renderSettings(){loadVoices();const v=TTS.voices;const opt=(sel)=>`<opt
     ${NV.ready?`<button class="btn sm" id="nvTest">▶ AI音声を試す</button>`:""}
     <details class="small"><summary>音が出ないときの診断</summary><div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">
       <div>端末の読み上げ：${TTS.ok?"あり":"なし"}／英語の声：${TTS.voices.length}個${TTS.lastErr?`／最後のエラー：${esc(TTS.lastErr)}`:""}</div>
+      <div>高速モード（複数スレッド）：${window.crossOriginIsolated?"オン":"オフ"}${NV.ready?`／計算に使う分離：${NV.isolated?"あり":"なし"}・CPU ${NV.cores}コア`:""} <button class="btn sm" id="coiToggle">${(()=>{try{return localStorage.getItem("re-coi-off")==="1";}catch(e){return false;}})()?"高速モードを戻す":"高速モードを切る（不具合時）"}</button></div>
       <div>AI音声：${esc(neuralStatus())}${NV.lastMs?`／1文 約${(NV.lastMs/1000).toFixed(1)}秒`:""}${NV.genErr?`／最後のエラー：${esc(NV.genErr.slice(0,80))}`:""}</div>
       <div class="row"><button class="btn sm" id="dgDev">端末の声で試す</button><button class="btn sm" id="dgAI">AI音声で試す</button></div><div id="dgMsg" class="note"></div></div></details></section>
   <section class="card"><h2>AI（APIキー）</h2>
@@ -868,6 +890,7 @@ function renderSettings(){loadVoices();const v=TTS.voices;const opt=(sel)=>`<opt
   ch("#npd",t=>S.settings.newPerDay=+t.value);ch("#cap",t=>S.settings.revCap=+t.value);ch("#sja",t=>S.settings.showJa=t.checked);
   const nvc=$("#neural");if(nvc)nvc.onchange=e=>{S.settings.neural=e.target.checked;save();if(e.target.checked)initNeural(true);renderSettings();};
   const nvs=$("#nvStart");if(nvs)nvs.onclick=()=>{NV.w=null;NV.failed=false;initNeural(true);renderSettings();};
+  const ct=$("#coiToggle");if(ct)ct.onclick=()=>{let off=false;try{off=localStorage.getItem("re-coi-off")==="1";localStorage.setItem("re-coi-off",off?"0":"1");}catch(e){}toast(off?"高速モードを戻します":"高速モードを切ります");setTimeout(()=>location.reload(),600);};
   const dgm=t=>{const m=$("#dgMsg");if(m)m.textContent=t;};
   $("#dgDev").onclick=async()=>{dgm("端末の声で再生中…");stopSpeak();const ok=await deviceSpeak("This is the phone voice. Can you hear me?",{g:"f"});dgm(ok?"端末の声：再生できました":"端末の声：再生できませんでした"+(TTS.lastErr?"（"+TTS.lastErr+"）":""));};
   $("#dgAI").onclick=async()=>{if(!NV.ready){dgm("AI音声はまだ準備できていません："+neuralStatus());return;}dgm("AI音声を作っています…");stopSpeak();const t0=Date.now();
@@ -910,7 +933,7 @@ function renderAbout(){$("#app").innerHTML=`<header class="top"><h1>学習法・
 render();
 /* 端末内保存のみ（Claude の外で動く版） */
 /* 新しい版が出ていたら自動で入れ替える（ブラウザに残った古い版を使わないように） */
-const APP_VER="20261108151327";
+const APP_VER="20261108161620";
 async function checkUpdate(){try{const r=await fetch("version.json?t="+Date.now(),{cache:"no-store"});if(!r.ok)return;const j=await r.json();
   if(!j||!j.v||j.v===APP_VER)return;let tried="";try{tried=sessionStorage.getItem("re-upd")||"";}catch(e){}if(tried===j.v)return;
   try{sessionStorage.setItem("re-upd",j.v);}catch(e){}

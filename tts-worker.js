@@ -1,5 +1,7 @@
 /* スマホの中でAI音声（Kokoro）を作るワーカー。モデルは初回だけ Hugging Face から読み込み、ブラウザに保存される */
-import { KokoroTTS } from "./kokoro.web.js";
+import { KokoroTTS, env } from "./kokoro.web.js";
+/* 計算エンジン（onnxruntime）はこのサイトに置いたものを使う。同じサイトなので複数スレッドで速く動ける */
+env.wasmPaths = new URL("./ort/", self.location.href).href;
 let tts = null, loading = null, chain = Promise.resolve();
 function load(){
   if (tts) return Promise.resolve(tts);
@@ -15,7 +17,9 @@ function load(){
         }
       }
     });
-    postMessage({ type: "ready" });
+    /* 準備運動：最初の1文は遅いので、先に1回作っておく */
+    try { await tts.generate("Okay.", { voice: "af_heart" }); } catch (_) {}
+    postMessage({ type: "ready", isolated: !!self.crossOriginIsolated, cores: navigator.hardwareConcurrency || 0 });
     return tts;
   })().catch(e => { loading = null; postMessage({ type: "error", message: String((e && e.message) || e) }); throw e; });
   return loading;
