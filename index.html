@@ -801,7 +801,7 @@ function renderTalk(){const last=T.msgs.filter(m=>m.who==="ai").slice(-1)[0];con
   <div id="voiceBar" class="tiny muted">${voiceBarHtml()}</div>
   ${T.summary?`<section class="card">${T.summary}</section>`:""}
   ${!T.ended?`<section class="card">${speakBox("tkIn")}
-    <div class="set small"><span>AIの返事の声</span><div class="chips">${deviceOK()?`<button class="chip" data-rv="fast" aria-pressed="${fastReply()}">⚡ すぐ（スマホの声）</button>`:`<span class="tiny muted">このスマホでは読み上げ機能が動かないため、AI音声で読みます。</span>`}<button class="chip" data-rv="ai" aria-pressed="${!fastReply()}">🎧 自然（AI音声・少し待つ）</button></div></div>
+    <div class="set small"><span>AIの返事の声</span><div class="chips"><button class="chip" data-rv="fast" aria-pressed="${fastReply()}">⚡ すぐ（スマホの声）${deviceOK()?"":"…試す"}</button><button class="chip" data-rv="ai" aria-pressed="${!fastReply()}">🎧 自然（AI音声・少し待つ）</button></div></div>
     <label class="set small"><span>AIが話し終わったら、自動で聞き始める（ハンズフリー）</span><input type="checkbox" id="handsfree" ${S.settings.handsfree===true?"checked":""} style="width:22px;height:22px;accent-color:var(--accent)"></label>
     ${last&&last.hint?`<button class="btn sm ghost" id="hint" style="text-align:left">💬 ヒント：<span class="en">${esc(last.hint)}</span>（${esc(last.hint_ja)}）</button>`:""}</section>`:""}`;
   foot(T.ended?`<button class="btn primary" id="home">ホームへ</button>`:`<button class="btn" id="end" ${T.turns<1||T.busy?"disabled":""}>終わって振り返る</button><button class="btn primary" id="send" ${T.busy?"disabled":""}>送る</button>`);
@@ -809,7 +809,19 @@ function renderTalk(){const last=T.msgs.filter(m=>m.who==="ai").slice(-1)[0];con
   on("#quit",()=>{stopListen();T=null;go("home");});on("#home",()=>{T=null;go("home");});
   on("#send",()=>{const v=$("#tkIn").value.trim();if(!v){toast("🎤を押して話すか、入力してください");return;}talkSend(v);});
   on("#hint",()=>{$("#tkIn").value=last.hint;$("#tkIn").focus();});
-  $$("[data-rv]").forEach(b=>b.onclick=()=>{S.settings.replyVoice=b.dataset.rv;save();renderTalk();});
+  $$("[data-rv]").forEach(b=>b.onclick=()=>{
+    if(b.dataset.rv==="fast"&&!deviceOK()){
+      /* タップの中で直接、スマホの読み上げを1回試す。鳴ればこの先はスマホの声ですぐ読む */
+      if(!window.speechSynthesis){toast("このブラウザには読み上げ機能がありません。",4000);return;}
+      b.textContent="⚡ 試しています…";let st=false;
+      try{speechSynthesis.cancel();}catch(e){}
+      const u=new SpeechSynthesisUtterance("Okay! Let's talk.");u.lang="en-US";
+      u.onstart=()=>{st=true;markDevice(true);S.settings.replyVoice="fast";save();toast("スマホの声が使えました。これからはすぐ読み上げます。",3500);renderTalk();};
+      u.onerror=e=>{if(!st){toast("スマホの読み上げが動きませんでした（"+((e&&e.error)||"エラー")+"）。スマホの設定で「テキスト読み上げ」を確認してください。",6000);renderTalk();}};
+      setTimeout(()=>{if(!st){try{speechSynthesis.cancel();}catch(e){}toast("スマホの読み上げが鳴りませんでした。スマホの設定で「テキスト読み上げ」→ 英語（米国）の音声データを入れてから、もう一度試してください。",7000);renderTalk();}},5000);
+      try{speechSynthesis.speak(u);}catch(e){toast("読み上げを始められませんでした："+e.message,5000);}
+      return;}
+    S.settings.replyVoice=b.dataset.rv;save();renderTalk();});
   const hf=$("#handsfree");if(hf)hf.onchange=e=>{S.settings.handsfree=e.target.checked;save();};
   const ti=$("#tkIn");if(ti)ti.addEventListener("spoken",()=>{const v=ti.value.trim();if(v&&!T.busy)talkSend(v);});
   on("#end",talkEnd);
@@ -975,7 +987,7 @@ function renderAbout(){$("#app").innerHTML=`<header class="top"><h1>学習法・
 render();
 /* 端末内保存のみ（Claude の外で動く版） */
 /* 新しい版が出ていたら自動で入れ替える（ブラウザに残った古い版を使わないように） */
-const APP_VER="20261108165604";
+const APP_VER="20261108170043";
 async function checkUpdate(){try{const r=await fetch("version.json?t="+Date.now(),{cache:"no-store"});if(!r.ok)return;const j=await r.json();
   if(!j||!j.v||j.v===APP_VER)return;let tried="";try{tried=sessionStorage.getItem("re-upd")||"";}catch(e){}if(tried===j.v)return;
   try{sessionStorage.setItem("re-upd",j.v);}catch(e){}
