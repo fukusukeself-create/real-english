@@ -343,8 +343,8 @@ function audioUrl(k){if(AU.cache[k])return AU.cache[k];const b=atob(window.AUDIO
 function playAudio(k,opt,my){return playUrl(audioUrl(k),opt,my);}
 function playUrl(url,opt,my){return new Promise(res=>{let a;try{a=new Audio(url);}catch(e){return res(false);}
   AU.cur=a;try{a.preservesPitch=true;}catch(e){}a.playbackRate=Math.max(0.5,(opt.rate||S.settings.rate)*(opt.slow?0.75:1));
-  a.onended=()=>{if(AU.cur===a)AU.cur=null;res(my===TTS.token);};a.onerror=()=>res(false);a.onpause=()=>{if(!a.ended)res(false);};
-  const p=a.play();if(p&&p.catch)p.catch(()=>res(false));});}
+  a.onended=()=>{if(AU.cur===a)AU.cur=null;res(my===TTS.token);};a.onerror=()=>{AU.lastErr="音声データ "+((a.error&&a.error.code)||"?");res(false);};a.onpause=()=>{if(!a.ended)res(false);};
+  const p=a.play();if(p&&p.catch)p.catch(e=>{AU.lastErr="再生 "+((e&&e.name)||"?");res(false);});});}
 function speakWord(w){const k="W|"+wkey(w);if(window.AUDIO&&window.AUDIO[k])return speak(w,{key:k,rate:1});return speak(wkey(w),{});}
 document.addEventListener("click",async e=>{const b=e.target.closest("[data-w]");if(!b)return;e.preventDefault();e.stopPropagation();
   $$(".wd.on,.wchip.on").forEach(x=>x.classList.remove("on"));b.classList.add("on");await speakWord(b.dataset.w);b.classList.remove("on");});
@@ -787,8 +787,10 @@ async function talkSend(text){if(T.busy)return;if(text){T.msgs.push({who:"me",te
     if(text){const me=T.msgs[T.msgs.length-1];if(j.fix&&j.fix.better)me.fix=j.fix;if(j.pron&&j.pron.meant)me.pron=j.pron;}
     T.msgs.push({who:"ai",raw:JSON.stringify({en:j.en,ja:j.ja,fix:j.fix||null,pron:j.pron||null,hint:j.hint||"",hint_ja:j.hint_ja||""}),en:j.en||"",ja:j.ja||"",hint:j.hint||"",hint_ja:j.hint_ja||""});
     if(text){today().talk=(today().talk||0)+1;addXP(3);save();}
-    T.busy=false;renderTalk();const myT=T,myN=T.msgs.length;if(j.fix&&j.fix.better)prefetch(j.fix.better,"af_heart");const tS=Date.now();setSpk(fastReply()?"🔊 読み上げ中…":NV.ready?"⏳ AI音声を作っています…":"⏳ AI音声の準備を待っています…");speak(j.en||"",{g,who,fast:fastReply(),onReady:()=>setSpk("🔊 読み上げ中…"+(fastReply()?"":`（${((Date.now()-tS)/1000).toFixed(1)}秒で準備）`))}).then(ok=>{setSpk(ok?"":"⚠ 読み上げできませんでした。▶で再生できます");return ok;}).then(()=>{if(view==="talk"&&T===myT&&T.msgs.length===myN&&!T.busy&&!T.ended&&!REC&&S.settings.handsfree===true&&canMic()){const b=$("[data-mic='tkIn']");if(b)listen($("#tkIn"),b);}});}
+    T.busy=false;renderTalk();const myT=T,myN=T.msgs.length;if(j.fix&&j.fix.better)prefetch(j.fix.better,"af_heart");const tS=Date.now();setSpk(fastReply()?"🔊 読み上げ中…":NV.ready?"⏳ AI音声を作っています…":"⏳ AI音声の準備を待っています…");speak(j.en||"",{g,who,fast:fastReply(),onReady:()=>setSpk("🔊 読み上げ中…"+(fastReply()?"":`（${((Date.now()-tS)/1000).toFixed(1)}秒で準備）`))}).then(ok=>{setSpk(ok?"":"⚠ 読み上げできませんでした。▶で再生できます【"+diagText()+"】");return ok;}).then(()=>{if(view==="talk"&&T===myT&&T.msgs.length===myN&&!T.busy&&!T.ended&&!REC&&S.settings.handsfree===true&&canMic()){const b=$("[data-mic='tkIn']");if(b)listen($("#tkIn"),b);}});}
   catch(e){T.busy=false;if(text){T.msgs.pop();T.turns--;}renderTalk();toast(aiErr(e),4000);}}
+function diagText(){return "AI音声:"+(NV.ready?"準備完了":NV.failed?"失敗 "+String(NV.err||"").slice(0,40):NV.loading?"準備中":"未準備")+(NV.genErr?"・作成エラー "+NV.genErr.slice(0,50):"")+
+  " / スマホの声:"+(TTS.ok?(TTS.broken?"動かない":"OK"):"なし")+(TTS.lastErr?"・"+TTS.lastErr:"")+"・声"+TTS.voices.length+"個"+(AU.lastErr?" / "+AU.lastErr:"")+(window.crossOriginIsolated?" / 高速":"");}
 function setSpk(t){if(T)T.spk=t;const el=$("#spk");if(el){el.textContent=t||"";el.classList.toggle("hidden",!t);}}
 function renderTalk(){const last=T.msgs.filter(m=>m.who==="ai").slice(-1)[0];const g=T.sc?((CAST[[...new Set(T.sc.lines.map(l=>l.s).filter(s=>s!=="You"))][0]]||{}).g||"f"):"f";
   $("#app").innerHTML=`<header class="top"><div><div class="label">AIと話す</div><h1 style="font-size:1.1rem">${esc(T.sc?T.sc.title:T.free)}</h1></div><button class="btn sm" id="quit">やめる</button></header>
@@ -962,7 +964,7 @@ function renderAbout(){$("#app").innerHTML=`<header class="top"><h1>学習法・
 render();
 /* 端末内保存のみ（Claude の外で動く版） */
 /* 新しい版が出ていたら自動で入れ替える（ブラウザに残った古い版を使わないように） */
-const APP_VER="20261108164247";
+const APP_VER="20261108164908";
 async function checkUpdate(){try{const r=await fetch("version.json?t="+Date.now(),{cache:"no-store"});if(!r.ok)return;const j=await r.json();
   if(!j||!j.v||j.v===APP_VER)return;let tried="";try{tried=sessionStorage.getItem("re-upd")||"";}catch(e){}if(tried===j.v)return;
   try{sessionStorage.setItem("re-upd",j.v);}catch(e){}
