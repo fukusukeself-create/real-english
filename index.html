@@ -904,6 +904,7 @@ function renderSettings(){loadVoices();const v=TTS.voices;const opt=(sel)=>`<opt
       <div>端末の読み上げ：${TTS.ok?"あり":"なし"}／英語の声：${TTS.voices.length}個${TTS.lastErr?`／最後のエラー：${esc(TTS.lastErr)}`:""}</div>
       <div>高速モード（複数スレッド）：${window.crossOriginIsolated?"オン":"オフ"}${NV.ready?`／計算に使う分離：${NV.isolated?"あり":"なし"}・CPU ${NV.cores}コア`:""} <button class="btn sm" id="coiToggle">${(()=>{try{return localStorage.getItem("re-coi-off")==="1";}catch(e){return false;}})()?"高速モードを戻す":"高速モードを切る（不具合時）"}</button></div>
       <div>AI音声：${esc(neuralStatus())}${NV.lastMs?`／1文 約${(NV.lastMs/1000).toFixed(1)}秒`:""}${NV.genErr?`／最後のエラー：${esc(NV.genErr.slice(0,80))}`:""}</div>
+      <div class="row"><button class="btn sm primary" id="dgRaw">いちばん簡単な読み上げテスト</button></div>
       <div class="row"><button class="btn sm" id="dgDev">端末の声で試す</button><button class="btn sm" id="dgAI">AI音声で試す</button></div><div id="dgMsg" class="note"></div></div></details></section>
   <section class="card"><h2>AI（APIキー）</h2>
     <p class="note">Claude Console で作った APIキー（sk-ant-…）を入れてください。キーはこのスマホのこのブラウザの中にだけ保存され、AIに話しかけるときに Anthropic にだけ送られます。</p>
@@ -923,6 +924,16 @@ function renderSettings(){loadVoices();const v=TTS.voices;const opt=(sel)=>`<opt
   const nvs=$("#nvStart");if(nvs)nvs.onclick=()=>{NV.w=null;NV.failed=false;initNeural(true);renderSettings();};
   const ct=$("#coiToggle");if(ct)ct.onclick=()=>{let off=false;try{off=localStorage.getItem("re-coi-off")==="1";localStorage.setItem("re-coi-off",off?"0":"1");if(off)localStorage.removeItem("re-coi-healed");}catch(e){}toast(off?"高速モードを戻します":"高速モードを切ります");setTimeout(()=>location.reload(),600);};
   const dgm=t=>{const m=$("#dgMsg");if(m)m.textContent=t;};
+  /* アプリの工夫を全部はずして、Chromeの読み上げをそのまま1回呼ぶ（タップの中で直接） */
+  $("#dgRaw").onclick=()=>{const out=[];const vs=(window.speechSynthesis&&speechSynthesis.getVoices())||[];
+    out.push("読み上げ機能:"+(window.speechSynthesis?"あり":"なし"),"声の数:"+vs.length,"英語の声:"+vs.filter(v=>/^en/i.test(v.lang)).slice(0,3).map(v=>v.name+"("+v.lang+")").join(", "));
+    dgm(out.join(" / ")+" / 再生中…");if(!window.speechSynthesis)return;
+    try{const u=new SpeechSynthesisUtterance("Hello! This is a simple test.");u.lang="en-US";let st=false;
+      u.onstart=()=>{st=true;markDevice(true);dgm(out.join(" / ")+" / ✅ 鳴り始めました");};
+      u.onend=()=>dgm(out.join(" / ")+(st?" / ✅ 最後まで再生できました":" / ⚠ 終わったが開始の合図なし"));
+      u.onerror=e=>dgm(out.join(" / ")+" / ❌ エラー:"+(e&&e.error));
+      speechSynthesis.speak(u);setTimeout(()=>{if(!st)dgm(out.join(" / ")+" / ❌ 5秒たっても鳴りません（speaking:"+speechSynthesis.speaking+" pending:"+speechSynthesis.pending+"）");},5000);
+    }catch(e){dgm("❌ "+e.message);}};
   $("#dgDev").onclick=async()=>{dgm("端末の声で再生中…");stopSpeak();TTS.broken=false;const ok=await deviceSpeak("This is the phone voice. Can you hear me?",{g:"f"});markDevice(ok);dgm(ok?"端末の声：再生できました":"端末の声：再生できませんでした"+(TTS.lastErr?"（"+TTS.lastErr+"）":""));};
   $("#dgAI").onclick=async()=>{if(!NV.ready){dgm("AI音声はまだ準備できていません："+neuralStatus());return;}dgm("AI音声を作っています…");stopSpeak();const t0=Date.now();
     const url=await neuralUrl("This is the AI voice. Can you hear me? "+Date.now()%1000,"af_heart");if(!url){dgm("AI音声：作れませんでした（"+(NV.genErr||"不明")+"）");return;}
@@ -964,7 +975,7 @@ function renderAbout(){$("#app").innerHTML=`<header class="top"><h1>学習法・
 render();
 /* 端末内保存のみ（Claude の外で動く版） */
 /* 新しい版が出ていたら自動で入れ替える（ブラウザに残った古い版を使わないように） */
-const APP_VER="20261108164908";
+const APP_VER="20261108165604";
 async function checkUpdate(){try{const r=await fetch("version.json?t="+Date.now(),{cache:"no-store"});if(!r.ok)return;const j=await r.json();
   if(!j||!j.v||j.v===APP_VER)return;let tried="";try{tried=sessionStorage.getItem("re-upd")||"";}catch(e){}if(tried===j.v)return;
   try{sessionStorage.setItem("re-upd",j.v);}catch(e){}
