@@ -451,10 +451,11 @@ function compare(target,heard){const tw=target.replace(/~/g," ").split(/\s+/).fi
 const KEY_LS="re-api-key",MODEL_LS="re-model";
 const MODELS={"claude-sonnet-5-5":{n:"Sonnet 5.5（おすすめ）",in:2,out:10},"claude-haiku-5-5":{n:"Haiku 5.5（安い・速い）",in:0.1,out:0.5},"claude-opus-5-5":{n:"Opus 5.5（いちばん賢い）",in:4,out:20}};
 const API={key:"",model:"claude-sonnet-5-5"};
+const chatModel=()=>S.settings.fastChat===false?API.model:"claude-haiku-5-5";
 try{API.key=localStorage.getItem(KEY_LS)||"";const m=localStorage.getItem(MODEL_LS);if(m&&MODELS[m])API.model=m;}catch(e){}
 let aiReady=true;
 const hasAI=()=>!!API.key;
-function track(u){if(!u)return;const m=MODELS[API.model]||MODELS["claude-sonnet-5-5"];const usd=((u.input_tokens||0)*m.in+(u.output_tokens||0)*m.out)/1e6;
+function track(u,model){if(!u)return;const m=MODELS[model||API.model]||MODELS["claude-sonnet-5-5"];const usd=((u.input_tokens||0)*m.in+(u.output_tokens||0)*m.out)/1e6;
   const mk=dkey().slice(0,7);S.api=S.api&&S.api.m===mk?S.api:{m:mk,usd:0,n:0};S.api.usd+=usd;S.api.n++;save();}
 function aiErr(e){const c=e&&e.code;
   if(c==="no_key")return "AIを使うには、設定でAPIキーを入れてください。";
@@ -466,10 +467,10 @@ function aiErr(e){const c=e&&e.code;
 async function ask(input,opt={}){if(!API.key)throw {code:"no_key"};
   const messages=typeof input==="string"?[{role:"user",content:input}]:input;const stream=!!opt.onText;
   let r;try{r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"x-api-key":API.key,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true","content-type":"application/json"},
-    body:JSON.stringify({model:API.model,max_tokens:opt.maxTokens||1200,messages,stream}),signal:opt.signal});}catch(e){throw {code:navigator.onLine===false?"offline":"network",message:String(e&&e.message||"")};}
+    body:JSON.stringify(Object.assign({model:opt.model||API.model,max_tokens:opt.maxTokens||1200,messages,stream},opt.system?{system:opt.system}:{})),signal:opt.signal});}catch(e){throw {code:navigator.onLine===false?"offline":"network",message:String(e&&e.message||"")};}
   if(!r.ok){let msg="";try{const j=await r.json();msg=(j.error&&j.error.message)||"";}catch(e){}
     throw {code:r.status===401||r.status===403?"bad_key":(r.status===429||r.status===529||r.status===503)?"rate_limited":/credit|balance|billing/i.test(msg)?"no_credit":"api_error",message:msg};}
-  if(!stream){const j=await r.json();track(j.usage);return (j.content||[]).filter(c=>c.type==="text").map(c=>c.text).join("");}
+  if(!stream){const j=await r.json();track(j.usage,opt.model);return (j.content||[]).filter(c=>c.type==="text").map(c=>c.text).join("");}
   const rd=r.body.getReader(),dec=new TextDecoder();let buf="",text="";const usage={input_tokens:0,output_tokens:0};
   for(;;){const {value,done}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});let i;
     while((i=buf.indexOf("\n\n"))>=0){const chunk=buf.slice(0,i);buf=buf.slice(i+2);const line=chunk.split("\n").find(x=>x.startsWith("data:"));if(!line)continue;
@@ -478,7 +479,7 @@ async function ask(input,opt={}){if(!API.key)throw {code:"no_key"};
       else if(ev.type==="message_start"&&ev.message&&ev.message.usage)usage.input_tokens=ev.message.usage.input_tokens||0;
       else if(ev.type==="message_delta"&&ev.usage)usage.output_tokens=ev.usage.output_tokens||0;
       else if(ev.type==="error")throw {code:"api_error",message:(ev.error&&ev.error.message)||""};}}
-  track(usage);return text;}
+  track(usage,opt.model);return text;}
 function pickJSON(t){const s=t.indexOf("{"),e=t.lastIndexOf("}");if(s<0||e<s)throw new Error("no json");return JSON.parse(t.slice(s,e+1));}
 const LEARNER="The learner is a Japanese adult who is a true beginner (junior-high-school English or below). Their goal: understand American dramas and news and speak casual English.";
 
@@ -724,28 +725,33 @@ Rules:
 - "fix" and "pron" are about the learner's previous message only; use null when nothing needs fixing or when this is your first line.
 Start now with your first line.`;
   T={sc,free,sys,msgs:[],busy:false,ended:false,summary:null,turns:0};view="talk";render();talkSend(null);}
-function talkHistory(){const m=[{role:"user",content:T.sys}];T.msgs.forEach(x=>{if(x.who==="ai")m.push({role:"assistant",content:x.raw});else m.push({role:"user",content:x.text});});
+function talkHistory(){const m=[{role:"user",content:"(Begin the role-play now with your first line.)"}];T.msgs.forEach(x=>{if(x.who==="ai")m.push({role:"assistant",content:x.raw});else m.push({role:"user",content:x.text});});
   /* 長くなりすぎないよう、最初の指示と直近だけ送る */
   let out=m;if(m.length>15){const head=m.slice(0,1),tail=m.slice(-12);if(tail[0].role==="assistant")tail.shift();out=head.concat([{role:"assistant",content:'{"en":"(earlier conversation omitted)","ja":"","fix":null,"hint":"","hint_ja":""}'}],tail);}
   /* 同じ役が続いたらまとめる */
   const merged=[];out.forEach(x=>{const last=merged[merged.length-1];if(last&&last.role===x.role)last.content+="\n"+x.content;else merged.push({role:x.role,content:x.content});});
   return merged;}
 async function talkSend(text){if(T.busy)return;if(text){T.msgs.push({who:"me",text});T.turns++;}T.busy=true;renderTalk();
-  try{const raw=await ask(talkHistory(),{modelTier:"quick"});let j;try{j=pickJSON(raw);}catch(e){j={en:raw.trim().slice(0,200),ja:"",fix:null,hint:"",hint_ja:""};}
+  const who=T.sc?[...new Set(T.sc.lines.map(l=>l.s).filter(s=>s!=="You"))][0]:null;
+  const g=T.sc?((CAST[who]||{}).g||"f"):"f";const voice=voiceName({g,who});let shownEn="",enDone=false;
+  try{const raw=await ask(talkHistory(),{model:chatModel(),system:T.sys,maxTokens:400,onText:({text})=>{
+      const m=text.match(/"en"\s*:\s*"((?:[^"\\]|\\.)*)(")?/);if(!m)return;let v;try{v=JSON.parse('"'+m[1].replace(/\\+$/,"")+'"');}catch(e){return;}
+      if(v!==shownEn){shownEn=v;const ty=$("#typing");if(ty){ty.textContent=v;}}
+      if(m[2]&&!enDone){enDone=true;prefetch(v,voice);}}});let j;try{j=pickJSON(raw);}catch(e){j={en:raw.trim().slice(0,200),ja:"",fix:null,hint:"",hint_ja:""};}
     if(text){const me=T.msgs[T.msgs.length-1];if(j.fix&&j.fix.better)me.fix=j.fix;if(j.pron&&j.pron.meant)me.pron=j.pron;}
     T.msgs.push({who:"ai",raw:JSON.stringify({en:j.en,ja:j.ja,fix:j.fix||null,pron:j.pron||null,hint:j.hint||"",hint_ja:j.hint_ja||""}),en:j.en||"",ja:j.ja||"",hint:j.hint||"",hint_ja:j.hint_ja||""});
     if(text){today().talk=(today().talk||0)+1;addXP(3);save();}
-    T.busy=false;renderTalk();const g=T.sc?((CAST[[...new Set(T.sc.lines.map(l=>l.s).filter(s=>s!=="You"))][0]]||{}).g||"f"):"f";const myT=T,myN=T.msgs.length;const who=T.sc?[...new Set(T.sc.lines.map(l=>l.s).filter(s=>s!=="You"))][0]:null;if(j.fix&&j.fix.better)prefetch(j.fix.better,"af_heart");speak(j.en||"",{g,who}).then(()=>{if(view==="talk"&&T===myT&&T.msgs.length===myN&&!T.busy&&!T.ended&&!REC&&S.settings.handsfree!==false&&canMic()){const b=$("[data-mic='tkIn']");if(b)listen($("#tkIn"),b);}});}
+    T.busy=false;renderTalk();const myT=T,myN=T.msgs.length;if(j.fix&&j.fix.better)prefetch(j.fix.better,"af_heart");speak(j.en||"",{g,who}).then(()=>{if(view==="talk"&&T===myT&&T.msgs.length===myN&&!T.busy&&!T.ended&&!REC&&S.settings.handsfree===true&&canMic()){const b=$("[data-mic='tkIn']");if(b)listen($("#tkIn"),b);}});}
   catch(e){T.busy=false;if(text){T.msgs.pop();T.turns--;}renderTalk();toast(aiErr(e),4000);}}
 function renderTalk(){const last=T.msgs.filter(m=>m.who==="ai").slice(-1)[0];const g=T.sc?((CAST[[...new Set(T.sc.lines.map(l=>l.s).filter(s=>s!=="You"))][0]]||{}).g||"f"):"f";
   $("#app").innerHTML=`<header class="top"><div><div class="label">AIと話す</div><h1 style="font-size:1.1rem">${esc(T.sc?T.sc.title:T.free)}</h1></div><button class="btn sm" id="quit">やめる</button></header>
   ${T.sc?`<div class="artbox">${ART(T.sc.art)}</div>`:""}
   <div class="chat">${T.msgs.map((m,i)=>m.who==="ai"?`<div class="msg them"><div class="row" style="flex-wrap:nowrap;align-items:flex-start">${playBtn(m.en,g,false,"再生",T.sc?[...new Set(T.sc.lines.map(l=>l.s).filter(s=>s!=="You"))][0]:"")}<div><div class="en">${esc(m.en)}</div>${m.ja?`<details class="tiny"><summary class="muted" style="font-weight:400">訳</summary>${esc(m.ja)}</details>`:""}</div></div></div>`:
     `<div class="msg me"><div class="en">${esc(m.text)}</div>${m.pron?`<div class="fix">🗣 発音：<span class="en">${esc(m.pron.heard||"")}</span> に聞こえました → <b class="en">${esc(m.pron.meant)}</b> <button class="wchip" data-w="${esc(wkey(m.pron.meant))}" style="min-height:30px;padding:2px 10px">▶ ${esc(m.pron.meant)}</button><br>${esc(m.pron.tip||"")}</div>`:""}${m.fix?`<div class="fix">💡 <span class="en">${esc(m.fix.better||"")}</span> ${m.fix.better?playBtn(m.fix.better,"f"):""}<br>${esc(m.fix.tip||"")}</div>`:""}</div>`).join("")}
-  ${T.busy?`<div class="msg them"><span class="muted">…</span></div>`:""}</div>
+  ${T.busy&&!T.ended?`<div class="msg them"><div class="en" id="typing"><span class="muted">…</span></div></div>`:""}</div>
   ${T.summary?`<section class="card">${T.summary}</section>`:""}
   ${!T.ended?`<section class="card">${speakBox("tkIn")}
-    <label class="set small"><span>AIが話し終わったら、自動で聞き始める（ハンズフリー）</span><input type="checkbox" id="handsfree" ${S.settings.handsfree!==false?"checked":""} style="width:22px;height:22px;accent-color:var(--accent)"></label>
+    <label class="set small"><span>AIが話し終わったら、自動で聞き始める（ハンズフリー）</span><input type="checkbox" id="handsfree" ${S.settings.handsfree===true?"checked":""} style="width:22px;height:22px;accent-color:var(--accent)"></label>
     ${last&&last.hint?`<button class="btn sm ghost" id="hint" style="text-align:left">💬 ヒント：<span class="en">${esc(last.hint)}</span>（${esc(last.hint_ja)}）</button>`:""}</section>`:""}`;
   foot(T.ended?`<button class="btn primary" id="home">ホームへ</button>`:`<button class="btn" id="end" ${T.turns<1||T.busy?"disabled":""}>終わって振り返る</button><button class="btn primary" id="send" ${T.busy?"disabled":""}>送る</button>`);
   const on=(s,f)=>{const el=$(s);if(el)el.onclick=f;};
@@ -849,6 +855,7 @@ function renderSettings(){loadVoices();const v=TTS.voices;const opt=(sel)=>`<opt
   <section class="card"><h2>AI（APIキー）</h2>
     <p class="note">Claude Console で作った APIキー（sk-ant-…）を入れてください。キーはこのスマホのこのブラウザの中にだけ保存され、AIに話しかけるときに Anthropic にだけ送られます。</p>
     <input type="password" id="apiKey" placeholder="sk-ant-..." value="${esc(API.key)}" autocomplete="off" style="width:100%;border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:var(--surface);min-height:44px">
+    <div class="set"><span>AIと話すときは速いAI（Haiku 5.5）を使う<br><span class="note">返事が速くなります。オフにすると下で選んだAIを使います</span></span><input type="checkbox" id="fastChat" ${S.settings.fastChat!==false?"checked":""} style="width:22px;height:22px;accent-color:var(--accent)"></div>
     <div class="set"><span>使うAI</span><select id="model">${Object.entries(MODELS).map(([k,m])=>`<option value="${k}" ${API.model===k?"selected":""}>${m.n}</option>`).join("")}</select></div>
     <div class="row"><button class="btn sm primary" id="keySave">保存してテスト</button>${API.key?`<button class="btn sm" id="keyDel">キーを消す</button>`:""}</div><div id="keyMsg"></div>
     <p class="note">今月の利用（目安）：${S.api&&S.api.m===dkey().slice(0,7)?`${S.api.n}回・約 $${S.api.usd.toFixed(2)}`:"まだありません"}。正確な金額は Console の請求画面で確認できます。</p></section>
@@ -867,6 +874,7 @@ function renderSettings(){loadVoices();const v=TTS.voices;const opt=(sel)=>`<opt
     const url=await neuralUrl("This is the AI voice. Can you hear me? "+Date.now()%1000,"af_heart");if(!url){dgm("AI音声：作れませんでした（"+(NV.genErr||"不明")+"）");return;}
     dgm("AI音声：作成 "+((Date.now()-t0)/1000).toFixed(1)+"秒。再生中…");const ok=await playUrl(url,{},TTS.token);dgm(ok?"AI音声：再生できました（作成 "+((Date.now()-t0)/1000).toFixed(1)+"秒）":"AI音声：再生できませんでした");};
   const nvt=$("#nvTest");if(nvt)nvt.onclick=()=>speak("Hey! This is a brand new sentence, read by the AI voice. Pretty cool, right?",{voice:"af_heart"});
+  $("#fastChat").onchange=e=>{S.settings.fastChat=e.target.checked;save();};
   $("#model").onchange=e=>{API.model=e.target.value;try{localStorage.setItem(MODEL_LS,API.model);}catch(x){}};
   $("#keySave").onclick=async()=>{const k=$("#apiKey").value.trim();const m=$("#keyMsg");if(!/^sk-/.test(k)){m.innerHTML=`<p class="note">sk-ant- で始まるキーを貼ってください。</p>`;return;}
     API.key=k;try{localStorage.setItem(KEY_LS,k);}catch(e){}m.innerHTML=`<p class="note">テストしています…</p>`;
@@ -902,7 +910,7 @@ function renderAbout(){$("#app").innerHTML=`<header class="top"><h1>学習法・
 render();
 /* 端末内保存のみ（Claude の外で動く版） */
 /* 新しい版が出ていたら自動で入れ替える（ブラウザに残った古い版を使わないように） */
-const APP_VER="20261108012209";
+const APP_VER="20261108151327";
 async function checkUpdate(){try{const r=await fetch("version.json?t="+Date.now(),{cache:"no-store"});if(!r.ok)return;const j=await r.json();
   if(!j||!j.v||j.v===APP_VER)return;let tried="";try{tried=sessionStorage.getItem("re-upd")||"";}catch(e){}if(tried===j.v)return;
   try{sessionStorage.setItem("re-upd",j.v);}catch(e){}
